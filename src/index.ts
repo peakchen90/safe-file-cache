@@ -55,7 +55,7 @@ export class SafeFileCache {
    */
   async save(
     filename: string,
-    file: ReadStream | buffer.Buffer,
+    file: ReadStream | buffer.Buffer | string,
     opts?: SaveFileOptions
   ): Promise<string> {
     const { hashAlgorithm, fastHash, lockTimeout } = this.options;

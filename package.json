@@ -1,17 +1,18 @@
 {
   "name": "safe-file-cache",
   "version": "0.0.1-beta.0",
-  "description": "Safely generate and consume cache files",
+  "description": "Safely generate and consume cache files, better for cluster deployment",
   "keywords": [
     "cache file",
     "cache",
     "safely",
+    "cluster",
     "integrity"
   ],
   "scripts": {
     "dev": "tsc -w",
     "build": "tsc",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "rm -rf lib && npm run build"
   },
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
