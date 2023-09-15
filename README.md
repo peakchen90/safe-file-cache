@@ -42,4 +42,4 @@ getFileBuffer('foo.txt');
 
 ## API
 
-See [type-definitions](./lib/index.d.ts).
+See [type-definitions](./src/index.ts).

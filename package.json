@@ -1,6 +1,6 @@
 {
   "name": "safe-file-cache",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Safely generate and consume cache files, better for cluster deployment",
   "keywords": [
     "cache file",
@@ -17,6 +17,7 @@
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
   "files": [
+    "src",
     "lib"
   ],
   "dependencies": {
