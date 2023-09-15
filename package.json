@@ -12,7 +12,7 @@
   "scripts": {
     "dev": "tsc -w",
     "build": "tsc",
-    "prepublishOnly": "rm -rf lib && npm run build"
+    "prepublishOnly": "node test.js && rm -rf lib && npm run build"
   },
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
