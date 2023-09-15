@@ -6,8 +6,12 @@ const { SafeFileCache } = require('./lib');
   await fs.remove('.fileCache');
   const fileCache = new SafeFileCache();
 
-  fileCache.save('foo.txt', Buffer.of(...Array(1000).fill(97)));
-  await fileCache.save('foo.txt', 'bar');
+  const savePromise = fileCache.save('foo.txt', Buffer.of(...Array(1000).fill(97)));
+  process.nextTick(() => {
+    fileCache.save('foo.txt', 'bar');
+  });
+
+  await savePromise;
 
   assert(
     (await fileCache.loadBuffer('foo.txt')).toString() === 'a'.repeat(1000),
