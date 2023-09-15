@@ -2,7 +2,8 @@ import type buffer from 'buffer';
 import path from 'path';
 import crypto from 'crypto';
 import chokidar from 'chokidar';
-import fs, { ReadStream, WriteStream } from 'fs-extra';
+import stream from 'stream';
+import fs from 'fs-extra';
 import { noop, readStreamToString } from './utils';
 
 export interface SafeFileCacheOptions {
@@ -21,6 +22,12 @@ export interface SafeFileCacheOptions {
 export interface SaveFileOptions {
   /** 等待写入文件超时时间，默认：0，表示用不超时 */
   timeout?: number;
+}
+
+export type FileData = stream.Readable | buffer.Buffer | string;
+
+export interface SaveFileTask<T> extends Promise<T> {
+  readonly stream: () => Promise<stream.Readable>;
 }
 
 const globalCacheDirSet = new Set<string>();
@@ -53,15 +60,103 @@ export class SafeFileCache {
    * @param file
    * @param opts
    */
-  async save(
+  save(
     filename: string,
-    file: ReadStream | buffer.Buffer | string,
+    file: FileData | (() => FileData) | (() => Promise<FileData>),
     opts?: SaveFileOptions
-  ): Promise<string> {
+  ): SaveFileTask<string> {
+    let _stream: stream.Readable;
+    let _readyResolve: () => void;
+    let readyPromise = new Promise<void>((resolve) => (_readyResolve = resolve));
+
+    const taskPromise = (async () => {
+      const { promise, processor } = await this.prepareSave(filename, opts);
+
+      if (processor) {
+        const fileData: FileData = typeof file === 'function' ? await file() : file;
+        _readyResolve!();
+
+        if (fileData instanceof stream.Readable) {
+          _stream = fileData.pipe(processor);
+        } else {
+          processor.write(fileData);
+          processor.end();
+        }
+      } else {
+        _readyResolve!();
+      }
+
+      return promise;
+    })();
+
+    Object.defineProperty(taskPromise, 'stream', {
+      value: async (): Promise<stream.Readable> => {
+        await readyPromise;
+        if (_stream) {
+          return _stream;
+        }
+
+        const cachePath = await taskPromise;
+        return fs.createReadStream(cachePath);
+      },
+      writable: false,
+      configurable: false,
+      enumerable: false,
+    });
+
+    return taskPromise as SaveFileTask<string>;
+  }
+
+  /**
+   * 准备处理 save
+   * @param filename
+   * @param opts
+   */
+  async prepareSave(
+    filename: string,
+    opts?: SaveFileOptions
+  ): Promise<{ promise: Promise<string>; processor?: stream.Transform }> {
     const { hashAlgorithm, fastHash, lockTimeout } = this.options;
     const { timeout = 0 } = opts || {};
     const { cachePath, integrityPath, lockPath } = this._getCachePaths(filename);
     let hasLock = false;
+
+    let cacheFileStream: stream.Writable | undefined;
+    const hash = crypto.createHash(hashAlgorithm);
+
+    const processor = new stream.Transform({
+      transform: (chunk, encoding, callback) => {
+        if (cacheFileStream) {
+          cacheFileStream.write(chunk);
+        }
+        if (!fastHash) {
+          hash.write(chunk);
+        }
+        callback(null, chunk);
+      },
+      flush: async (callback) => {
+        let error: any = undefined;
+        try {
+          const fileHash = fastHash
+            ? await this._computeFileMtimeHash(cachePath)
+            : hash.digest('hex');
+
+          // 写入文件指纹 .integrity
+          await fs.writeFile(integrityPath, fileHash);
+        } catch (err: any) {
+          error = err;
+        } finally {
+          if (hasLock) {
+            await this._tryRemoveFile(lockPath);
+          }
+          callback(error);
+        }
+      },
+    });
+
+    let promise = new Promise<string>((resolve, reject) => {
+      processor.on('finish', () => resolve(cachePath)).on('error', reject);
+    });
 
     try {
       await fs.ensureDir(path.dirname(cachePath));
@@ -80,60 +175,26 @@ export class SafeFileCache {
         hasLock = true;
       }
 
-      let fileHash: string;
+      cacheFileStream = await new Promise<stream.Writable>((resolve, reject) => {
+        const _cacheFileStream = fs
+          .createWriteStream(cachePath, { flags: 'wx' })
+          .on('open', () => resolve(_cacheFileStream))
+          .on('error', (err) => reject(err));
+      });
 
-      if (file instanceof ReadStream) {
-        await new Promise((resolve, reject) => {
-          let cacheFileStream: WriteStream;
-          const hash = crypto.createHash(hashAlgorithm);
-
-          const handleWriteFile = () => {
-            file
-              .on('data', (chunk) => {
-                cacheFileStream.write(chunk);
-                if (!fastHash) {
-                  hash.write(chunk);
-                }
-              })
-              .on('end', () => {
-                cacheFileStream.close();
-
-                resolve(
-                  (async () => {
-                    if (fastHash) {
-                      fileHash = await this._computeFileMtimeHash(cachePath);
-                    } else {
-                      fileHash = hash.digest('hex');
-                    }
-                  })()
-                );
-              })
-              .on('error', reject);
-          };
-
-          cacheFileStream = fs
-            .createWriteStream(cachePath, { flags: 'wx' })
-            .on('open', handleWriteFile)
-            .on('error', (err) => reject(err));
-        });
-      } else {
-        await fs.writeFile(cachePath, file, { flag: 'wx' });
-        if (fastHash) {
-          fileHash = await this._computeFileMtimeHash(cachePath);
-        } else {
-          fileHash = crypto.createHash(hashAlgorithm).update(file).digest('hex');
-        }
+      return { promise, processor };
+    } catch (err: any) {
+      if (!(err?.code === 'EEXIST')) {
+        throw err;
       }
 
-      // 写入文件指纹 .integrity
-      await fs.writeFile(integrityPath, fileHash!);
+      promise = fs
+        .pathExists(lockPath)
+        .then((exists) => {
+          if (!exists) return;
 
-      return cachePath;
-    } catch (err: any) {
-      if (err.code === 'EEXIST') {
-        if (await fs.pathExists(lockPath)) {
           // 等待释放锁文件
-          await new Promise<void>((resolve, reject) => {
+          return new Promise<void>((resolve, reject) => {
             let timer: any;
             let watcher = chokidar.watch(lockPath);
 
@@ -152,21 +213,16 @@ export class SafeFileCache {
               resolve();
             });
           });
-        }
+        })
+        .then(() => this.load(filename))
+        .then((cachePath) => {
+          if (!cachePath) {
+            throw new Error(`Failed to process the file: ${filename}`);
+          }
+          return cachePath;
+        });
 
-        // 校验缓存文件完整性
-        if (!(await this.load(filename))) {
-          throw new Error(`Failed to save file: ${filename}`);
-        }
-
-        return cachePath;
-      }
-
-      throw err;
-    } finally {
-      if (hasLock) {
-        await this._tryRemoveFile(lockPath);
-      }
+      return { promise, processor: undefined };
     }
   }
 
@@ -174,7 +230,7 @@ export class SafeFileCache {
    * 加载缓存文件流
    * @param filename
    */
-  async loadStream(filename: string): Promise<ReadStream | null> {
+  async loadStream(filename: string): Promise<stream.Readable | null> {
     const filePath = await this.load(filename);
     if (filePath) {
       return fs.createReadStream(filePath);
@@ -262,7 +318,7 @@ export class SafeFileCache {
    * @param file
    * @private
    */
-  private async _computeFileContentHash(file: ReadStream): Promise<string> {
+  private async _computeFileContentHash(file: stream.Readable): Promise<string> {
     const { hashAlgorithm } = this.options;
     const fileHash = file.pipe(crypto.createHash(hashAlgorithm)).setEncoding('hex');
     return await readStreamToString(fileHash);
