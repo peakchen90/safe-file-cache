@@ -21,6 +21,8 @@ pnpm install safe-file-cache
 
 ## Usage
 
+### Basic
+
 ```js
 const { SafeFileCache } = require('safe-file-cache');
 
@@ -38,6 +40,34 @@ async function getFileBuffer(filename) {
 }
 
 getFileBuffer('foo.txt');
+```
+
+### Stream
+
+```js
+const { SafeFileCache } = require('safe-file-cache');
+const express = require('express');
+const axios = require('axios');
+
+const app = express();
+
+const fileCache = new SafeFileCache();
+
+app.get('/foo', async (req, res) => {
+  let stream = await fileCache.loadStream(filename);
+  if (!stream) {
+    stream = fileCache
+      .save(filename, async () => {
+        // fetch stream example
+        const { data } = axios.get('https://example.com/bar.tgz', {
+          responseType: 'stream',
+        });
+        return data;
+      })
+      .stream();
+  }
+  stream.pipe(res);
+});
 ```
 
 ## API
