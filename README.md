@@ -59,8 +59,8 @@ app.get('/foo', async (req, res) => {
     stream = fileCache
       .save(filename, async () => {
         // fetch stream example
-        const { data } = axios.get('https://example.com/bar.tgz', {
-          responseType: 'stream',
+        const { data } = await axios.get('https://example.com/bar.tgz', {
+          responseType: 'stream'
         });
         return data;
       })
