@@ -300,18 +300,6 @@ export class SafeFileCache {
    * @private
    */
   private _init() {
-    const handleExit = () => {
-      for (const lockFile of this._lockFiles) {
-        fs.removeSync(lockFile);
-      }
-    };
-
-    process.on('exit', handleExit);
-    process.on('SIGHUP', handleExit);
-    process.on('SIGINT', handleExit);
-    process.on('SIGTERM', handleExit);
-    process.on('SIGBREAK', handleExit);
-
     const { cacheDir } = this.options;
     if (fs.pathExistsSync(cacheDir) && fs.statSync(cacheDir).isDirectory()) {
       const files = fs.readdirSync(cacheDir);
