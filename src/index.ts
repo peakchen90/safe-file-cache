@@ -67,37 +67,34 @@ export class SafeFileCache {
     opts?: SaveFileOptions
   ): SaveFileTask<string> {
     let _stream: stream.Readable;
-    let _readyResolve: () => void;
-    let readyPromise = new Promise<void>((resolve) => (_readyResolve = resolve));
 
-    const taskPromise = (async () => {
-      const { promise, processor } = await this.prepareSave(filename, opts);
+    const ready = async () => {
+      const result = await this.prepareSave(filename, opts);
+      const { processor } = result;
 
       if (processor) {
         const fileData: FileData = typeof file === 'function' ? await file() : file;
-        _readyResolve!();
-
         if (fileData instanceof stream.Readable) {
           _stream = fileData.pipe(processor);
         } else {
           processor.write(fileData);
           processor.end();
         }
-      } else {
-        _readyResolve!();
       }
 
-      return promise;
-    })();
+      return result;
+    };
 
-    Object.defineProperty(taskPromise, 'stream', {
+    const finalPromise = ready().then(({ promise }) => promise);
+
+    Object.defineProperty(finalPromise, 'stream', {
       value: async (): Promise<stream.Readable> => {
-        await readyPromise;
+        const { promise } = await ready();
         if (_stream) {
           return _stream;
         }
 
-        const cachePath = await taskPromise;
+        const cachePath = await promise;
         return fs.createReadStream(cachePath);
       },
       writable: false,
@@ -105,7 +102,7 @@ export class SafeFileCache {
       enumerable: false,
     });
 
-    return taskPromise as SaveFileTask<string>;
+    return finalPromise as SaveFileTask<string>;
   }
 
   /**
