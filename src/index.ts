@@ -30,10 +30,13 @@ export interface SaveFileTask<T> extends Promise<T> {
   readonly stream: () => Promise<stream.Readable>;
 }
 
-const globalCacheDirSet = new Set<string>();
+let _instId = 0;
 
 export class SafeFileCache {
   readonly options: Required<SafeFileCacheOptions>;
+  readonly instId: number;
+  private readonly _lockFiles = new Set<string>();
+  private readonly _lockFileExt = '.LOCK$$';
 
   constructor(options?: SafeFileCacheOptions) {
     const { cacheDir: _cacheDir } = options || {};
@@ -42,16 +45,14 @@ export class SafeFileCache {
     this.options = {
       hashAlgorithm: 'sha1',
       fastHash: false,
-      hashSalt: process.env.NODE_ENV || '',
+      hashSalt: '',
       lockTimeout: 5 * 60000,
       ...options,
       cacheDir,
     };
+    this.instId = ++_instId;
 
-    if (globalCacheDirSet.has(cacheDir)) {
-      throw new Error(`Duplicate cache directory: ${cacheDir}`);
-    }
-    globalCacheDirSet.add(cacheDir);
+    this._init();
   }
 
   /**
@@ -124,6 +125,14 @@ export class SafeFileCache {
     let cacheFileStream: stream.Writable | undefined;
     const hash = crypto.createHash(hashAlgorithm);
 
+    const _tryRemoveLockFile = async () => {
+      if (hasLock) {
+        await this._tryRemoveFile(lockPath);
+        this._lockFiles.delete(lockPath);
+        hasLock = false;
+      }
+    };
+
     const processor = new stream.Transform({
       transform: (chunk, encoding, callback) => {
         if (cacheFileStream) {
@@ -146,16 +155,19 @@ export class SafeFileCache {
         } catch (err: any) {
           error = err;
         } finally {
-          if (hasLock) {
-            await this._tryRemoveFile(lockPath);
-          }
+          await _tryRemoveLockFile();
           callback(error);
         }
       },
     });
 
     let promise = new Promise<string>((resolve, reject) => {
-      processor.on('finish', () => resolve(cachePath)).on('error', reject);
+      processor
+        .on('finish', () => resolve(cachePath))
+        .on('error', (err) => {
+          _tryRemoveLockFile();
+          reject(err);
+        });
     });
 
     try {
@@ -172,6 +184,7 @@ export class SafeFileCache {
       // 写入 .lock 文件
       if (!(await fs.pathExists(cachePath))) {
         await fs.writeFile(lockPath, '', { flag: 'wx' });
+        this._lockFiles.add(lockPath);
         hasLock = true;
       }
 
@@ -269,7 +282,7 @@ export class SafeFileCache {
     }
 
     // 校验文件完整性
-    let actualHash = fastHash
+    const actualHash = fastHash
       ? await this._computeFileMtimeHash(cachePath)
       : await this._computeFileContentHash(fs.createReadStream(cachePath));
     const expectHash = await fs.readFile(integrityPath, 'utf-8');
@@ -283,13 +296,47 @@ export class SafeFileCache {
   }
 
   /**
+   * 实例初始化
+   * @private
+   */
+  private _init() {
+    const handleExit = () => {
+      for (const lockFile of this._lockFiles) {
+        fs.removeSync(lockFile);
+      }
+    };
+
+    process.on('exit', handleExit);
+    process.on('SIGHUP', handleExit);
+    process.on('SIGINT', handleExit);
+    process.on('SIGTERM', handleExit);
+    process.on('SIGBREAK', handleExit);
+
+    const { cacheDir } = this.options;
+    if (fs.pathExistsSync(cacheDir) && fs.statSync(cacheDir).isDirectory()) {
+      const files = fs.readdirSync(cacheDir);
+      for (const file of files) {
+        if (file.endsWith(this._lockFileExt)) {
+          fs.removeSync(path.join(cacheDir, file));
+        }
+      }
+    }
+  }
+
+  /**
    * 计算字符串文本 hash
    * @param text
    * @private
    */
   private _hashText(text: string): string {
-    const { hashAlgorithm } = this.options;
-    return crypto.createHash(hashAlgorithm).update(text).digest('hex');
+    const { hashAlgorithm, hashSalt } = this.options;
+    const hash = crypto.createHash(hashAlgorithm);
+    hash.update(this.instId.toString());
+    hash.update('\n\n\n');
+    hash.update(hashSalt);
+    hash.update('\n\n\n');
+    hash.update(text);
+    return hash.digest('hex');
   }
 
   /**
@@ -304,7 +351,7 @@ export class SafeFileCache {
     const cachePath = path.join(cacheDir, cacheName);
     const integrityExt = `.${fastHash ? 'fast-' : ''}integrity`;
     const integrityPath = path.join(cacheDir, cacheName + integrityExt);
-    const lockPath = path.join(cacheDir, `${cacheName}.lock`);
+    const lockPath = path.join(cacheDir, cacheName + this._lockFileExt);
 
     return {
       cachePath,
