@@ -68,8 +68,7 @@ export class SafeFileCache {
   ): SaveFileTask<string> {
     let _stream: stream.Readable;
 
-    const ready = async () => {
-      const result = await this.prepareSave(filename, opts);
+    const readyPromise = this.prepareSave(filename, opts).then(async (result) => {
       const { processor } = result;
 
       if (processor) {
@@ -83,13 +82,13 @@ export class SafeFileCache {
       }
 
       return result;
-    };
+    });
 
-    const finalPromise = ready().then(({ promise }) => promise);
+    const finalPromise = readyPromise.then(({ promise }) => promise);
 
     Object.defineProperty(finalPromise, 'stream', {
       value: async (): Promise<stream.Readable> => {
-        const { promise } = await ready();
+        const { promise } = await readyPromise;
         if (_stream) {
           return _stream;
         }
