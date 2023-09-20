@@ -30,17 +30,21 @@ export interface SaveFileTask<T> extends Promise<T> {
   readonly stream: () => Promise<stream.Readable>;
 }
 
-let _instId = 0;
+const _cacheDirs = new Set<string>();
 
 export class SafeFileCache {
   readonly options: Required<SafeFileCacheOptions>;
-  readonly instId: number;
   private readonly _lockFiles = new Set<string>();
   private readonly _lockFileExt = '.LOCK$$';
 
   constructor(options?: SafeFileCacheOptions) {
     const { cacheDir: _cacheDir } = options || {};
     const cacheDir = path.resolve(_cacheDir || '.fileCache');
+
+    if (_cacheDirs.has(cacheDir)) {
+      console.error(`[Warn] duplicate cache directory: ${cacheDir}`);
+    }
+    _cacheDirs.add(cacheDir);
 
     this.options = {
       hashAlgorithm: 'sha1',
@@ -50,7 +54,6 @@ export class SafeFileCache {
       ...options,
       cacheDir,
     };
-    this.instId = ++_instId;
 
     this._init();
   }
@@ -315,8 +318,6 @@ export class SafeFileCache {
   private _hashText(text: string): string {
     const { hashAlgorithm, hashSalt } = this.options;
     const hash = crypto.createHash(hashAlgorithm);
-    hash.update(this.instId.toString());
-    hash.update('\n\n\n');
     hash.update(hashSalt);
     hash.update('\n\n\n');
     hash.update(text);
