@@ -1,4 +1,3 @@
-import type buffer from 'buffer';
 import path from 'path';
 import crypto from 'crypto';
 import chokidar from 'chokidar';
@@ -24,7 +23,7 @@ export interface SaveFileOptions {
   timeout?: number;
 }
 
-export type FileData = stream.Readable | buffer.Buffer | string;
+export type FileData = stream.Readable | Buffer | string;
 
 export interface SaveFileTask<T> extends Promise<T> {
   readonly stream: () => Promise<stream.Readable>;
@@ -254,7 +253,7 @@ export class SafeFileCache {
    * 加载缓存文件 buffer
    * @param filename
    */
-  async loadBuffer(filename: string): Promise<buffer.Buffer | null> {
+  async loadBuffer(filename: string): Promise<Buffer | null> {
     const filePath = await this.load(filename);
     if (filePath) {
       return fs.readFile(filePath);
