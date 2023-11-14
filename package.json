@@ -1,6 +1,6 @@
 {
   "name": "safe-file-cache",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "description": "Safely generate and consume cache files, better for cluster deployment",
   "keywords": [
     "cache file",

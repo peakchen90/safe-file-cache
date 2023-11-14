@@ -74,7 +74,13 @@ export class SafeFileCache {
       const { processor } = result;
 
       if (processor) {
-        const fileData: FileData = typeof file === 'function' ? await file() : file;
+        let fileData: FileData;
+        try {
+          fileData = typeof file === 'function' ? await file() : file;
+        } catch (err) {
+          processor.emit('error', err);
+          throw err;
+        }
         if (fileData instanceof stream.Readable) {
           _stream = fileData.pipe(processor);
         } else {
