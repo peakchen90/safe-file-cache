@@ -84,8 +84,12 @@ export class SafeFileCache {
         if (fileData instanceof stream.Readable) {
           _stream = fileData.pipe(processor);
         } else {
-          processor.write(fileData);
-          processor.end();
+          await new Promise<void>((resolve, reject) => {
+            processor.write(fileData, (error) => {
+              if (error) reject(error);
+              processor.end(resolve);
+            });
+          });
         }
       }
 
